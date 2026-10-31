@@ -5,8 +5,27 @@ import smtplib
 import threading
 import urllib.request
 from email.message import EmailMessage
+from pathlib import Path
 
 log = logging.getLogger(__name__)
+
+
+def _load_env():
+    """Load NTFY_/SMTP_/NOTIFY_ settings from agent/.env (never overrides real env vars)."""
+    path = Path(__file__).resolve().parent.parent / ".env"
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key = key.strip()
+        if key.startswith(("NTFY_", "SMTP_", "NOTIFY_")):
+            os.environ.setdefault(key, val.strip().strip('"').strip("'"))
+
+
+_load_env()
 
 
 def _ntfy(title, message):
@@ -27,7 +46,7 @@ def _email(title, message, to):
     msg["Subject"], msg["From"], msg["To"] = title, user, to
     msg.set_content(message)
     with smtplib.SMTP_SSL(os.getenv("SMTP_HOST", "smtp.gmail.com"), 465, timeout=10) as s:
-        s.login(user, pwd)
+        s.login(user, pwd.replace(" ", ""))
         s.send_message(msg)
 
 
