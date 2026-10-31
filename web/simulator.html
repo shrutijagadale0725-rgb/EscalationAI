@@ -599,7 +599,7 @@ function renderNext(r){
 function renderTrack(r){
  const i=STEPS.findIndex(k=>(r.stage||"").toLowerCase().includes(k[0])),w=r.status==="waiting";
  $("track").innerHTML=STEPS.map((s,n)=>{const d=n<i||r.status==="resolved",o=n===i&&!d;
-  let sub=o&&w?`<span class="mut">Due ${dt(r.day+r.days_left)}</span>`:"";if(s[2]&&(o||d))sub+=`<a href="${s[2]}" target="_blank" rel="noopener">Official site</a>`;
+  let sub=o&&w?`<span class="mut" style="display:block;font-weight:400">Due ${dt(r.day+r.days_left)}</span>`:"";if(s[2]&&(o||d))sub+=`<a href="${s[2]}" target="_blank" rel="noopener">Official site</a>`;
   return`<li class="${d?"done":o?"on"+(w?" wait":""):""}">${s[1]}${sub}</li>`}).join("");
  const t=r.timeline||[];$("hist").hidden=!t.length;$("tl").innerHTML=t.map(x=>`<li>${esc(x)}</li>`).join("")}
 function renderCase(r){
@@ -677,10 +677,10 @@ async function runTurn(text){
  }catch(e){$("err").classList.add("show");toast("Can't reach the server. Check it's running, then try again.");if(caseId)view("chat")}}
 $("retry").onclick=()=>{$("err").classList.remove("show");const t=lastText;log.lastChild&&log.lastChild.textContent===t&&log.lastChild.remove();handle(t)};
 const PF=["amazon","flipkart","myntra","meesho","ajio","nykaa","swiggy","zomato","blinkit","croma"];
-function guess(t){const o={},l=t.toLowerCase(),p=PF.find(x=>l.includes(x));if(p)o.platform=p[0].toUpperCase()+p.slice(1);
- let rest=t;const a=t.match(/(?:rs\.?|₹|inr)\s*(\d[\d,]*(?:\.\d+)?)|(?<![a-z0-9-])(\d[\d,]*(?:\.\d+)?)\s*(?:rs\b|rupees\b|inr\b|₹)/i);
+function guess(t){const o={},l=t.toLowerCase(),p=PF.find(x=>l.includes(x));if(p)o.platform=p[0].toUpperCase()+p.slice(1);if(!o.platform){const q=t.match(/\b(?:from|on|at|via|through)\s+([A-Z][A-Za-z0-9&'-]{1,24}(?:\s+[A-Z][A-Za-z0-9&'-]{1,24})?)/);if(q&&!/^(The|My|This|That|Day|It|I|A|An|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)$/.test(q[1].split(" ")[0]))o.platform=q[1]}
+ let rest=t;const a=t.match(/(?:rs\.?|₹|inr)\s*(\d+(?:,\d{2,3})*(?:\.\d+)?)|(?<![a-z0-9-])(\d+(?:,\d{2,3})*(?:\.\d+)?)\s*(?:rs\b|rupees\b|inr\b|₹)/i);
  if(a){o.amount=(a[1]||a[2]).replace(/,/g,"");rest=t.replace(a[0]," ")}
- const m=rest.match(/\b([a-z]{1,4}-?\d{3,})\b/i);if(m)o.order_id=m[1].toUpperCase();return o}
+ const k=rest.match(/\border\b(?:\s*(?:no\.?|number|num|id|#))?\s*(?:is|was|:|=)?\s*#?\s*((?=[a-z0-9-]*\d)[a-z0-9][a-z0-9-]{2,})/i);if(k)o.order_id=k[1].toUpperCase();else{const m=rest.match(/\b([a-z]{1,4}-?\d{3,})\b/i);if(m)o.order_id=m[1].toUpperCase()}return o}
 async function startFromForm(msg,f){
  lastText=msg;let r=await callUnderstand(msg);
  if(r.tool==="start_case"){

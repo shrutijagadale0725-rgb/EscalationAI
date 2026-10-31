@@ -22,12 +22,19 @@ COMPLAINT = re.compile(r"\b(broken|damaged|refund|order|not|stopped|wrong|late|d
                         r"delivered|received|never|missing|fake|scam|working|issue|problem)\b", re.I)
 CMD = re.compile(r"\b(sent|mailed|emailed|submitted|skip|advance|letter|draft|show|resolved|fixed|stop|file)\b", re.I)
 ORDER_RE = re.compile(r"\b([a-z]{1,4}-?\d{3,})\b", re.I)
-_NUM = r"\d[\d,]*(?:\.\d+)?"
+# "order no is 24732", "order #24732", "Order number 5521", "order id: OD-1" (token must contain a digit)
+ORDER_LABEL = re.compile(r"\border\b(?:\s*(?:no\.?|number|num|id|#))?\s*(?:is|was|:|=)?\s*#?\s*"
+                         r"((?=[a-z0-9-]*\d)[a-z0-9][a-z0-9-]{2,})", re.I)
+# Company after from/on/at/via/through when it isn't in PLATFORMS; needs a capital letter.
+FROM_RE = re.compile(r"\b(?:from|on|at|via|through)\s+([A-Z][A-Za-z0-9&'-]{1,24}(?:\s+[A-Z][A-Za-z0-9&'-]{1,24})?)")
+NOT_A_COMPANY = {"the", "my", "this", "that", "day", "it", "i", "a", "an", "monday", "tuesday",
+                 "wednesday", "thursday", "friday", "saturday", "sunday"}
+_NUM = r"\d+(?:,\d{2,3})*(?:\.\d+)?"
 # Amount can come before the currency word (Rs 2,499) or after it (2499rs, 5000 rupees).
 # This must run BEFORE ORDER_RE, or a bare suffix amount like "rs5000" gets swallowed
 # whole as an order id (ORDER_RE matches letters+digits with no required separator).
 AMOUNT_RE = re.compile(
-    rf"(?:(?:rs\.?|₹|inr)\s*({_NUM})|(?<![a-z0-9-])({_NUM})\s*(?:rs\b|rupees\b|inr\b|₹))", re.I)
+    rf"(?:(?:rs\.?|\u20b9|inr)\s*({_NUM})|(?<![a-z0-9-])({_NUM})\s*(?:rs\b|rupees\b|inr\b|\u20b9))", re.I)
 
 TOOL_SCHEMAS = [
     {"name": "start_case", "when": "the user is describing a new problem for the first time",
@@ -53,6 +60,10 @@ def extract_fields(text, bare=False):
             out["platform"] = p.capitalize()
             break
     rest = text
+    if "platform" not in out:
+        q = FROM_RE.search(text)
+        if q and q.group(1).split()[0].lower() not in NOT_A_COMPANY:
+            out["platform"] = q.group(1)
     m = AMOUNT_RE.search(rest)
     if m:
         out["amount"] = (m.group(1) or m.group(2)).replace(",", "")
@@ -62,7 +73,7 @@ def extract_fields(text, bare=False):
         if m:
             out["amount"] = m.group(1)
             rest = rest[:m.start()] + " " + rest[m.end():]
-    m = ORDER_RE.search(rest)
+    m = ORDER_LABEL.search(rest) or ORDER_RE.search(rest)
     if m:
         out["order_id"] = m.group(1).upper()
         rest = rest[:m.start()] + " " + rest[m.end():]
@@ -72,7 +83,7 @@ def _strip_issue(text, fields):
     """Drop the order-id/amount fragments the message already supplied as structured fields,
     so the drafted letter's problem line doesn't just repeat Order/Amount again."""
     rest = text
-    for pattern in (AMOUNT_RE, ORDER_RE):
+    for pattern in (AMOUNT_RE, ORDER_LABEL, ORDER_RE):
         m = pattern.search(rest)
         if m:
             rest = rest[:m.start()] + rest[m.end():]

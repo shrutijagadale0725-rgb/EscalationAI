@@ -3,6 +3,7 @@ import pytest
 from escalation_agent.service import CaseService
 from escalation_agent import nlu
 
+
 class Clock:
     def __init__(self):
         self.t = 1_000_000.0
@@ -269,3 +270,11 @@ def test_escalation_sends_notification(tmp_path):
     svc.respond(cid, {"action": "sent"})
     svc.respond(cid, {"action": "advance", "days": 999})
     assert len(sent) == 1
+
+def test_extract_fields_handles_real_world_phrasing():
+    f = nlu.extract_fields("I bought a kurta on Myntra three weeks ago. The refund never came. Order no is 88213, Rs 1,499.")
+    assert f == {"platform": "Myntra", "amount": "1499", "order_id": "88213"}
+    f = nlu.extract_fields("I got a wrong size of sneakers from Tata CLiQ. Order number 5521.")
+    assert f == {"platform": "Tata CLiQ", "order_id": "5521"}
+    f = nlu.extract_fields("I ordered shoes from Roadster and lost track, the order no is 24732")
+    assert f["platform"] == "Roadster" and f["order_id"] == "24732" and "amount" not in f

@@ -1,5 +1,6 @@
 """The LangGraph case workflow. Every wait is an interrupt, so state survives across days."""
 import time
+import re
 from typing import TypedDict
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
@@ -38,7 +39,9 @@ def _days(v, default=0):
     except (TypeError, ValueError):
         return default
 
-
+def _plain(text):
+    """Letters are copied into email/WhatsApp, so strip Markdown bold markers."""
+    return re.sub(r"\*\*(.+?)\*\*", r"\1", text or "")
 def build_graph(rules, checkpointer, polish=None, clock=time.time):
     stages = rules["stages"]
 
@@ -69,6 +72,7 @@ def build_graph(rules, checkpointer, polish=None, clock=time.time):
         text = draft_letter(s, cur(s), sender=s.get("name") or "[Your name]")
         if polish:
             text = polish(text, s)
+        text = _plain(text)
         return {"draft": text, "status": "draft_ready", "sent": False, "day": today(s)}
 
     def await_send(s):
@@ -113,7 +117,7 @@ def build_graph(rules, checkpointer, polish=None, clock=time.time):
                                    f"Is it worth it for Rs. {s['amount']}? Say file or stop.")}) or {}
         act = reply.get("action")
         if act == "file":
-            return {"draft": case_file(s), "status": "ready_to_file", "timeline": log(s, "Case file prepared")}
+            return {"draft": _plain(case_file(s)), "status": "ready_to_file", "timeline": log(s, "Case file prepared")}
         if act == "stop":
             return closed(s)
         if act == "resolved":
