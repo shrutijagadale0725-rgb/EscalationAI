@@ -1,7 +1,6 @@
 """The LangGraph case workflow. Every wait is an interrupt, so state survives across days."""
 import time
 from typing import TypedDict
-
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
@@ -20,6 +19,7 @@ class CaseState(TypedDict, total=False):
     amount: str
     purchase_date: str
     name: str
+    email: str
     stage: int
     day: int
     stage_start: int

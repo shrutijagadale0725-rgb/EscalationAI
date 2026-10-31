@@ -259,3 +259,13 @@ def test_reopen_case_tool_refuses_filed_case_without_losing_status(client):
     r = client.post("/api/tool/reopen_case", json={"case_id": cid})
     d = r.json()
     assert d["error"] == "cannot_reopen" and d["status"] == "resolved"
+
+def test_escalation_sends_notification(tmp_path):
+    sent = []
+    svc = CaseService(db_path=str(tmp_path / "t.db"), polish=None,
+                      notifier=lambda title, msg, email: sent.append(msg))
+    cid = svc.start("Phone", "Arrived damaged", platform="Amazon", order_id="123",
+                    amount="2499", name="Test")["case_id"]
+    svc.respond(cid, {"action": "sent"})
+    svc.respond(cid, {"action": "advance", "days": 999})
+    assert len(sent) == 1

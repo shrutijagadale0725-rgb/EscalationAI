@@ -4,7 +4,7 @@ import sqlite3
 import time
 import uuid
 from pathlib import Path
-
+from .notify import notify
 import yaml
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
@@ -42,7 +42,8 @@ def _clean(payload):
 
 
 class CaseService:
-    def __init__(self, db_path="cases.db", rules_path=None, polish="auto", clock=time.time):
+    def __init__(self, db_path="cases.db", rules_path=None, polish="auto", clock=time.time, notifier=notify):
+        self.notifier = notifier
         rules_path = rules_path or Path(__file__).resolve().parent.parent / "rules.yaml"
         self.rules = yaml.safe_load(Path(rules_path).read_text())
         self.clock = clock
@@ -56,12 +57,11 @@ class CaseService:
 
     def _cfg(self, case_id):
         return {"configurable": {"thread_id": case_id}}
-
-    def start(self, product, issue, platform="", order_id="", amount="", purchase_date="", name=""):
+    def start(self, product, issue, platform="", order_id="", amount="", purchase_date="", name="", email=""):
         cid = "c" + uuid.uuid4().hex[:12]
         state = {"case_id": cid, "product": product.strip(), "issue": issue.strip(),
                 "platform": _tidy_platform(platform), "order_id": order_id.strip(),
-                "amount": _tidy_amount(amount), "purchase_date": purchase_date.strip(), "name": name.strip(),
+                "amount": _tidy_amount(amount), "purchase_date": purchase_date.strip(), "name": name.strip(),"email": email.strip(),
                 "stage": 0, "day": 0, "stage_start": 0, "created_at": self.clock(), "skew": 0, "sent": False, "draft": "",
                 "timeline": ["Day 0 · Case opened"], "status": "collecting"}
         self.graph.invoke(state, self._cfg(cid))
@@ -79,9 +79,12 @@ class CaseService:
         before = self._fingerprint(snap.values)
         if snap.values["status"] not in DONE:
             self.graph.invoke(Command(resume=payload), self._cfg(case_id))
+        after = self.graph.get_state(self._cfg(case_id)).values
         v = self.view(case_id)
-        if payload.get("action") in ("advance", "file", "sent", "stop") and \
-                before == self._fingerprint(self.graph.get_state(self._cfg(case_id)).values):
+        notice = self._announce(snap.values, after)
+        if notice:
+            v["notice"] = notice
+        if payload.get("action") in ("advance", "file", "sent", "stop") and before == self._fingerprint(after):
             v["say"] = "That doesn't apply right now. " + v["say"]
         return v
 
@@ -90,7 +93,12 @@ class CaseService:
         snap = self.graph.get_state(self._cfg(case_id))
         if snap.values and snap.values["status"] == "waiting":
             self.graph.invoke(Command(resume={"action": "check"}), self._cfg(case_id))
-        return self.view(case_id)
+        v = self.view(case_id)
+        if v and snap.values:
+            notice = self._announce(snap.values, self.graph.get_state(self._cfg(case_id)).values)
+            if notice:
+                v["notice"] = notice
+        return v
     
     def reopen(self, case_id):
         """Re-activate a case the user stopped, from the same stage it was stopped at."""
@@ -107,7 +115,22 @@ class CaseService:
             v["status"], v["_resume"] = "drafting", None
         self.graph.invoke(v, self._cfg(case_id))
         return self.view(case_id)
-
+    def _announce(self, before, after):
+        """Tell the user when a case escalates. Returns the text (for the in-app banner). Never raises."""
+        try:
+            if not self.notifier or not before or not after or after["stage"] == before["stage"]:
+                return None
+            old, new = self.rules["stages"][before["stage"]], self.rules["stages"][after["stage"]]
+            if new.get("is_filing"):
+                text = (f"No reply from {old['name']} within {old['window_days']} days. "
+                        f"Next step: {new['name']}. Open your case to decide whether to file.")
+            else:
+                text = (f"No reply from {old['name']} within {old['window_days']} days. "
+                        f"Your case moved to {new['name']} and a new letter is ready.")
+            self.notifier("EscalationAI: case escalated", text, after.get("email"))
+            return text
+        except Exception:
+            return None
     @staticmethod
     def _fingerprint(v):
         return (v.get("status"), v.get("stage"), v.get("day"), len(v.get("timeline", [])))
