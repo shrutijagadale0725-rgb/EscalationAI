@@ -10,6 +10,7 @@ from .drafting import case_file, draft_letter
 
 REQUIRED = ["platform", "order_id", "amount"]
 FIELDS = REQUIRED + ["product", "issue", "purchase_date", "name"]
+REPLY_KINDS = ("accepted", "partial", "rejected", "stalling", "unclear")
 
 
 class CaseState(TypedDict, total=False):
@@ -26,6 +27,8 @@ class CaseState(TypedDict, total=False):
     day: int
     stage_start: int
     created_at: float
+    reply_kind: str  # how the company's last reply was classified, while we wait on it
+    escalation_reason: str  # why the case last moved up: silence | rejected | declined
     skew: int  # demo days added by simulate_days, on top of real elapsed time
     sent: bool
     draft: str
@@ -83,7 +86,7 @@ def build_graph(rules, checkpointer, polish=None, clock=time.time):
         reply = interrupt({"ask": f"The letter to {cur(s)['name']} is ready. Tell me once you have sent it."}) or {}
         if reply.get("action") == "sent":
             return {"sent": True, "stage_start": today(s), "day": today(s), "status": "waiting",
-                    "timeline": log(s, f"Sent to {cur(s)['name']}")}
+                    "reply_kind": "", "timeline": log(s, f"Sent to {cur(s)['name']}")}
         if reply.get("action") == "resolved":
             return resolved(s)
         if reply.get("action") == "stop":
@@ -100,21 +103,41 @@ def build_graph(rules, checkpointer, polish=None, clock=time.time):
         if act == "stop":
             return closed(s)
         out = {}
+        forced = None  # a company reply or user choice can end the wait before the window does
         if act == "advance":
             out["skew"] = s.get("skew", 0) + _days(reply.get("days", 1))
         elif act == "reply":
-            out["timeline"] = log(s, f"Reply from {st['name']}: {reply.get('text', '')}".strip().rstrip(":"))
+            kind = reply.get("kind") if reply.get("kind") in REPLY_KINDS else "unclear"
+            text = str(reply.get("text", "")).strip()
+            out["reply_kind"] = kind
+            out["timeline"] = log(s, f"Reply from {st['name']} ({kind}): {text}".rstrip(": "))
+            if kind == "accepted":
+                return {**out, "day": today(s), "status": "resolved",
+                        "timeline": log({**s, **out}, "Resolved: they agreed to your complaint")}
+            if kind == "rejected":
+                forced, out["escalation_reason"] = "escalating", "rejected"
+        elif act == "escalate":
+            out["timeline"] = log(s, f"You chose not to wait for {st['name']}")
+            forced, out["escalation_reason"] = "escalating", "declined"
         # any resume (including a plain "check") re-reads the real clock
         day = today({**s, **out})
         out["day"] = day
-        out["status"] = "escalating" if day - s["stage_start"] >= st["window_days"] else "waiting"
+        if forced:
+            out["status"] = forced
+        else:
+            out["status"] = "escalating" if day - s["stage_start"] >= st["window_days"] else "waiting"
+            if out["status"] == "escalating":
+                out["escalation_reason"] = "silence"
         return out
 
     def next_stage(s):
         nxt = s["stage"] + 1
-        return {"stage": nxt, "sent": False,
+        why = {"rejected": f"{cur(s)['name'][0].upper() + cur(s)['name'][1:]} rejected the complaint, escalating",
+               "declined": f"You declined to wait for {cur(s)['name']}, escalating"
+               }.get(s.get("escalation_reason"), f"No reply from {cur(s)['name']}, escalating")
+        return {"stage": nxt, "sent": False, "reply_kind": "",
                 "status": "gate" if stages[nxt].get("is_filing") else "drafting",
-                "timeline": log(s, f"No reply from {cur(s)['name']}, escalating")}
+                "timeline": log(s, why)}
 
     def gate(s):
         reply = interrupt({"ask": (f"The Consumer Commission is a formal filing and takes real effort. "

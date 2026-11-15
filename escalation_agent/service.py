@@ -87,7 +87,7 @@ class CaseService:
         notice = self._announce(snap.values, after)
         if notice:
             v["notice"] = notice
-        if payload.get("action") in ("advance", "file", "sent", "stop") and before == self._fingerprint(after):
+        if payload.get("action") in ("advance", "file", "sent", "stop", "escalate") and before == self._fingerprint(after):
             v["say"] = "That doesn't apply right now. " + v["say"]
         return v
 
@@ -97,12 +97,17 @@ class CaseService:
             if not self.notifier or not before or not after or after["stage"] == before["stage"]:
                 return None
             old, new = self.rules["stages"][before["stage"]], self.rules["stages"][after["stage"]]
-            if new.get("is_filing"):
-                text = (f"No reply from {old['name']} within {old['window_days']} days. "
-                        f"Next step: {new['name']}. Open your case to decide whether to file.")
+            why = after.get("escalation_reason")
+            if why == "rejected":
+                lead = f"{old['name'][0].upper() + old['name'][1:]} rejected your complaint."
+            elif why == "declined":
+                lead = f"You chose not to wait for {old['name']}."
             else:
-                text = (f"No reply from {old['name']} within {old['window_days']} days. "
-                        f"Your case moved to {new['name']} and a new letter is ready.")
+                lead = f"No reply from {old['name']} within {old['window_days']} days."
+            if new.get("is_filing"):
+                text = f"{lead} Next step: {new['name']}. Open your case to decide whether to file."
+            else:
+                text = f"{lead} Your case moved to {new['name']} and a new letter is ready."
             self.notifier("EscalationAI: case escalated", text, after.get("email"))
             return text
         except Exception:
@@ -152,7 +157,8 @@ class CaseService:
             left = max(0, st["window_days"] - (v["day"] - v["stage_start"]))
         return {"case_id": case_id, "status": v["status"], "stage": st["name"], "day": v["day"],
                 "days_left": left, "ask": ask, "say": self._say(v, st, ask, left),
-                "draft": v.get("draft", ""), "timeline": v["timeline"], "created_at": v.get("created_at")}
+                "draft": v.get("draft", ""), "timeline": v["timeline"], "created_at": v.get("created_at"),
+                "reply_kind": v.get("reply_kind", "")}
 
     @staticmethod
     def _say(v, st, ask, left):
@@ -161,6 +167,16 @@ class CaseService:
             return f"Your letter to {st['name']} is ready. Send it, then tell me."
         if s == "waiting":
             gone = v["day"] - v["stage_start"]
+            who = st["name"][0].upper() + st["name"][1:]
+            if v.get("reply_kind") == "partial":
+                return (f"{who} made an offer. Say 'resolved' to accept it, or 'escalate' to move to the next "
+                        f"step. Their window has {left} {_d(left)} left.")
+            if v.get("reply_kind") == "stalling":
+                return (f"Noted: {st['name']} is still looking into it. The clock keeps running, "
+                        f"with {left} {_d(left)} left.")
+            if v.get("reply_kind") == "unclear":
+                return (f"I saved their reply to your history. Tell me if it settles things ('resolved') "
+                        f"or if you want to 'escalate'. {left} {_d(left)} left.")
             if gone == 0:
                 return f"Sent. {st['name'][0].upper() + st['name'][1:]} has {left} {_d(left)} to reply."
             return (f"It has been {gone} {_d(gone)} since you wrote to {st['name']}. "

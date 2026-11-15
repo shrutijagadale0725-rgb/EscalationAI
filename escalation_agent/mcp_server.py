@@ -30,17 +30,21 @@ def start_case(product: str, issue: str, platform: str = "", order_id: str = "",
 @mcp.tool()
 def log_response(case_id: str, event: str, platform: str = "", order_id: str = "",
                  amount: str = "", note: str = "") -> dict:
-    """Record what happened. event is one of: answer, sent, seller_replied, resolved, file, stop."""
+    """Record what happened. event is one of: answer, sent, seller_replied, resolved, escalate, file, stop.
+    For seller_replied, note is what the company said; it is classified as accepted, partial,
+    rejected, stalling or unclear, and the case reacts to that."""
     payloads = {
         "answer": {"platform": platform, "order_id": order_id, "amount": amount},
         "sent": {"action": "sent"},
-        "seller_replied": {"action": "reply", "text": note},
+        "seller_replied": {"action": "reply", "text": note,
+                           "kind": nlu.classify_reply(note) if event == "seller_replied" else "unclear"},
         "resolved": {"action": "resolved"},
+        "escalate": {"action": "escalate"},
         "file": {"action": "file"},
         "stop": {"action": "stop"},
     }
     if event not in payloads:
-        return {"error": "bad_event", "say": "I didn't catch that. Was it sent, a reply, resolved, file or stop?"}
+        return {"error": "bad_event", "say": "I didn't catch that. Was it sent, a reply, resolved, escalate, file or stop?"}
     return svc.respond(case_id, payloads[event]) or NOT_FOUND
 
 

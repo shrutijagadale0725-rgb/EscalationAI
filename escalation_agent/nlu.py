@@ -40,8 +40,9 @@ TOOL_SCHEMAS = [
     {"name": "start_case", "when": "the user is describing a new problem for the first time",
      "args": "product, issue, platform, order_id, amount, purchase_date"},
     {"name": "log_response", "when": "the user answers missing details, says they sent the letter, says "
-                                     "the seller replied, says it's resolved, or says file/stop at a decision point",
-     "args": "case_id, event (answer|sent|seller_replied|resolved|file|stop), platform, order_id, amount, note"},
+                                     "the seller replied (note = what they said), says it's resolved, says escalate/move on, "
+                                     "or says file/stop at a decision point",
+     "args": "case_id, event (answer|sent|seller_replied|resolved|escalate|file|stop), platform, order_id, amount, note"},
     {"name": "get_next_step", "when": "the user is asking for a status update", "args": "case_id"},
     {"name": "draft_escalation", "when": "the user wants to see the current letter", "args": "case_id"},
     {"name": "simulate_days", "when": "the user wants to skip/advance the clock (demo only)", "args": "case_id, days"},
@@ -92,6 +93,84 @@ def _strip_issue(text, fields):
     rest = re.sub(r"\s{2,}", " ", rest).strip(" ,.")
     return rest or text.strip()
 
+# ---------------------------------------------------------------------------
+# Company replies: did they accept, make a partial offer, reject, or stall?
+# ---------------------------------------------------------------------------
+REPLY_KINDS = ("accepted", "partial", "rejected", "stalling", "unclear")
+ESCALATE_NOW = re.compile(r"\b(escalate|move on|next step|take it further|not (?:good |happy )?enough|"
+                          r"(?:reject|decline|refuse)\w* (?:the |their |this )?offer|don'?t accept)\b", re.I)
+_NO_REPLY = re.compile(r"\b(?:no|not|nothing|yet|never|haven'?t|hasn'?t|didn'?t)\b[^.]{0,20}\b(?:repl\w*|respon\w*|heard|answer\w*)\b", re.I)
+_REPLY_VERB = (r"offer\w*|reject\w*|refus\w*|den(?:y|ied|ies)|declin\w*|agree\w*|accept\w*|approv\w*|"
+               r"said|says|replied|responded|asked|promis\w*|told|wrote|emailed|messag\w*|called|want\w*|"
+               r"sent|refund\w*|replac\w*|apolog\w*")
+_REPLY_SUBJECT = (r"they|seller|company|support|customer care|customer service|team|officer|helpline|"
+                  r"grievance|" + "|".join(PLATFORMS))
+_IS_REPLY = re.compile(rf"\b(?:{_REPLY_SUBJECT})\b[^.?!]{{0,40}}\b(?:{_REPLY_VERB})\b|"
+                       r"\b(?:got|received|have|had|there'?s)\s+(?:a|an|the)\s+(?:reply|response|answer|mail|email)\b|"
+                       r"\b(?:replied|responded|reply came|they said)\b", re.I)
+
+_PARTIAL = re.compile(r"\b(partial\w*|\d{1,2}\s?%|half|voucher|coupon|gift card|discount|store credit|"
+                      r"goodwill|part of|some of|instead of|only offer\w*|can offer|offered (?:you |me )?(?:a|an|rs|₹))", re.I)
+_REJECT = re.compile(r"\b(reject\w*|den(?:y|ied|ies)|declin\w*|refus\w*|cannot|can'?t|won'?t|unable to|"
+                     r"not eligible|ineligible|not covered|out of warranty|no refund|not possible|"
+                     r"not able to|does not qualify|doesn'?t qualify|policy does not)\b", re.I)
+_ACCEPT = re.compile(r"\b(?:accept\w*|approv\w*|agreed|will (?:refund|replace)|"
+                     r"refund\w*\b.{0,40}\b(?:issued|process\w*|initiated|approved|credited|on (?:its|the) way)|"
+                     r"replacement\b.{0,40}\b(?:sent|shipped|dispatched|approved|arranged|on (?:its|the) way)|"
+                     r"full refund)\b", re.I)
+_STALL = re.compile(r"\b(looking into|investigat\w*|under review|reviewing|working on|get back|please wait|"
+                    r"in progress|forwarded|more time|received your|acknowledg\w*|ticket|will update|"
+                    r"\d+\s?-\s?\d+ (?:business |working )?days|few (?:more )?days)\b", re.I)
+
+
+def is_company_reply(message):
+    """True when the user is relaying something the company said (and not 'they haven't replied')."""
+    return bool(_IS_REPLY.search(message)) and not _NO_REPLY.search(message)
+
+
+def regex_reply_kind(text):
+    """Deterministic classifier. Order matters: an offer of less than asked ('50% refund',
+    'voucher') must be checked before the words 'refund'/'approved' make it look like a full yes,
+    and a refusal wins over a stalling phrase ('we cannot, but we are reviewing')."""
+    if _PARTIAL.search(text):
+        return "partial"
+    if _REJECT.search(text):
+        return "rejected"
+    if _ACCEPT.search(text):
+        return "accepted"
+    if _STALL.search(text):
+        return "stalling"
+    return "unclear"
+
+
+def groq_reply_kind(text, key, model):
+    system = ("Classify a company's reply to a consumer complaint. Reply ONLY as JSON "
+              '{"kind": "accepted"|"partial"|"rejected"|"stalling"|"unclear"}. '
+              "accepted = they agree to what the customer asked (full refund, replacement, repair). "
+              "partial = they offer less than asked (part refund, voucher, discount, conditional). "
+              "rejected = they refuse or deny. "
+              "stalling = acknowledgement or 'we are looking into it' with no decision. "
+              "unclear = you cannot tell. Use only what the text says.")
+    kind = (_groq_json(system, text, key, model) or {}).get("kind")
+    if kind not in REPLY_KINDS:
+        raise ValueError(f"model returned an unknown reply kind: {kind!r}")
+    return kind
+
+
+def classify_reply(text):
+    """Model first (if a key is set), regex otherwise or on any failure. Always returns a valid kind."""
+    text = str(text or "").strip()
+    if not text:
+        return "unclear"
+    key = os.getenv("GROQ_API_KEY")
+    if key:
+        try:
+            return groq_reply_kind(text, key, os.getenv("GROQ_MODEL", "openai/gpt-oss-120b"))
+        except Exception:
+            pass
+    return regex_reply_kind(text)
+
+
 def regex_route(message, case_id, status):
     low = message.lower()
     if not case_id:
@@ -109,14 +188,16 @@ def regex_route(message, case_id, status):
         return "simulate_days", {**base, "days": int(days.group(1)) if days else 8}
     if re.search(r"\b(resolved|refund(ed)? (received|came|done)|got (my )?refund|fixed)\b", low):
         return "log_response", {**base, "event": "resolved"}
+    if status == "waiting" and ESCALATE_NOW.search(low):
+        return "log_response", {**base, "event": "escalate"}
+    if is_company_reply(message):
+        return "log_response", {**base, "event": "seller_replied", "note": message.strip()}
     if re.search(r"\b(sent|mailed|emailed|submitted|posted)\b", low):
         return "log_response", {**base, "event": "sent"}
     if status == "gate" and re.search(r"\b(file|yes)\b", low):
         return "log_response", {**base, "event": "file"}
     if re.search(r"\b(stop|drop it|cancel|close)\b", low):
         return "log_response", {**base, "event": "stop"}
-    if re.search(r"\b(replied|responded|they said)\b", low):
-        return "log_response", {**base, "event": "seller_replied", "note": message.strip()}
     if re.search(r"\b(letter|draft|show)\b", low):
         return "draft_escalation", base
     if status == "collecting":
