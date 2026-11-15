@@ -4,13 +4,14 @@ import sqlite3
 import time
 import uuid
 from pathlib import Path
-from .notify import notify
+
 import yaml
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
 
 from .drafting import make_polisher
 from .graph import build_graph
+from .notify import notify
 
 DONE = ("resolved", "closed", "ready_to_file")
 
@@ -57,11 +58,13 @@ class CaseService:
 
     def _cfg(self, case_id):
         return {"configurable": {"thread_id": case_id}}
+
     def start(self, product, issue, platform="", order_id="", amount="", purchase_date="", name="", email=""):
         cid = "c" + uuid.uuid4().hex[:12]
         state = {"case_id": cid, "product": product.strip(), "issue": issue.strip(),
                 "platform": _tidy_platform(platform), "order_id": order_id.strip(),
-                "amount": _tidy_amount(amount), "purchase_date": purchase_date.strip(), "name": name.strip(),"email": email.strip(),
+                "amount": _tidy_amount(amount), "purchase_date": purchase_date.strip(), "name": name.strip(),
+                "email": email.strip(),
                 "stage": 0, "day": 0, "stage_start": 0, "created_at": self.clock(), "skew": 0, "sent": False, "draft": "",
                 "timeline": ["Day 0 · Case opened"], "status": "collecting"}
         self.graph.invoke(state, self._cfg(cid))
@@ -88,33 +91,6 @@ class CaseService:
             v["say"] = "That doesn't apply right now. " + v["say"]
         return v
 
-    def refresh(self, case_id):
-        """Re-read the real clock: escalates a waiting case whose reply window has passed."""
-        snap = self.graph.get_state(self._cfg(case_id))
-        if snap.values and snap.values["status"] == "waiting":
-            self.graph.invoke(Command(resume={"action": "check"}), self._cfg(case_id))
-        v = self.view(case_id)
-        if v and snap.values:
-            notice = self._announce(snap.values, self.graph.get_state(self._cfg(case_id)).values)
-            if notice:
-                v["notice"] = notice
-        return v
-    
-    def reopen(self, case_id):
-        """Re-activate a case the user stopped, from the same stage it was stopped at."""
-        snap = self.graph.get_state(self._cfg(case_id))
-        if not snap.values or snap.values.get("status") != "closed":
-            return None  # nothing to reopen -- either no such case, or it resolved/was filed instead
-        v = dict(snap.values)
-        is_filing = self.rules["stages"][v["stage"]].get("is_filing", False)
-        day = int((self.clock() - v.get("created_at", self.clock())) // 86400) + v.get("skew", 0)
-        v["timeline"] = v["timeline"] + [f"Day {day} · Reopened by the user"]
-        if is_filing:
-            v["status"], v["_resume"] = "gate", "gate"
-        else:
-            v["status"], v["_resume"] = "drafting", None
-        self.graph.invoke(v, self._cfg(case_id))
-        return self.view(case_id)
     def _announce(self, before, after):
         """Tell the user when a case escalates. Returns the text (for the in-app banner). Never raises."""
         try:
@@ -131,6 +107,35 @@ class CaseService:
             return text
         except Exception:
             return None
+
+    def refresh(self, case_id):
+        """Re-read the real clock: escalates a waiting case whose reply window has passed."""
+        snap = self.graph.get_state(self._cfg(case_id))
+        if snap.values and snap.values["status"] == "waiting":
+            self.graph.invoke(Command(resume={"action": "check"}), self._cfg(case_id))
+        v = self.view(case_id)
+        if v and snap.values:
+            notice = self._announce(snap.values, self.graph.get_state(self._cfg(case_id)).values)
+            if notice:
+                v["notice"] = notice
+        return v
+
+    def reopen(self, case_id):
+        """Re-activate a case the user stopped, from the same stage it was stopped at."""
+        snap = self.graph.get_state(self._cfg(case_id))
+        if not snap.values or snap.values.get("status") != "closed":
+            return None  # nothing to reopen -- either no such case, or it resolved/was filed instead
+        v = dict(snap.values)
+        is_filing = self.rules["stages"][v["stage"]].get("is_filing", False)
+        day = int((self.clock() - v.get("created_at", self.clock())) // 86400) + v.get("skew", 0)
+        v["timeline"] = v["timeline"] + [f"Day {day} · Reopened by the user"]
+        if is_filing:
+            v["status"], v["_resume"] = "gate", "gate"
+        else:
+            v["status"], v["_resume"] = "drafting", None
+        self.graph.invoke(v, self._cfg(case_id))
+        return self.view(case_id)
+
     @staticmethod
     def _fingerprint(v):
         return (v.get("status"), v.get("stage"), v.get("day"), len(v.get("timeline", [])))
@@ -147,7 +152,7 @@ class CaseService:
             left = max(0, st["window_days"] - (v["day"] - v["stage_start"]))
         return {"case_id": case_id, "status": v["status"], "stage": st["name"], "day": v["day"],
                 "days_left": left, "ask": ask, "say": self._say(v, st, ask, left),
-                "draft": v.get("draft", ""), "timeline": v["timeline"]}
+                "draft": v.get("draft", ""), "timeline": v["timeline"], "created_at": v.get("created_at")}
 
     @staticmethod
     def _say(v, st, ask, left):
@@ -191,13 +196,14 @@ class CaseService:
     def list_cases(self, limit=20):
         """Past cases, most recent first, with their live status."""
         rows = self._conn.execute(
-            "SELECT case_id, name, product, platform, order_id, amount FROM case_index "
+            "SELECT case_id, name, product, platform, order_id, amount, created_at FROM case_index "
             "ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
         out = []
-        for cid, name, product, platform, order_id, amount in rows:
+        for cid, name, product, platform, order_id, amount, created_at in rows:
             v = self.view(cid)
             if not v:
                 continue
             out.append({"case_id": cid, "name": name, "product": product, "platform": platform,
-                        "order_id": order_id, "amount": amount, "status": v["status"], "stage": v["stage"]})
+                        "order_id": order_id, "amount": amount, "status": v["status"], "stage": v["stage"],
+                        "created_at": created_at})
         return out

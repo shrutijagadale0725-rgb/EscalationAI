@@ -152,7 +152,8 @@ async def understand_route(request):
     if tool == "get_next_step" and status == "waiting" and args.get("case_id"):
         current = svc.view(args["case_id"])
         if current and current["status"] == "waiting" and current["days_left"] is not None:
-            state = {"day": current["day"], "days_left": current["days_left"], "stage": current["stage"]}
+            state = {"day": current["day"], "days_left": current["days_left"], "stage": current["stage"],
+                     "created_at": current.get("created_at")}
             outcome = nlu.try_waiting_reply(message, state)
             if outcome:
                 kind, payload = outcome

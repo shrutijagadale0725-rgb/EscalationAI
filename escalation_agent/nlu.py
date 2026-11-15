@@ -236,7 +236,11 @@ WAIT_TOOLS = [{
         },
     },
 }]
-
+def _opened_iso(state):
+    """The case's real opening date (case-day 0). Falls back to today if not provided."""
+    import datetime
+    c = state.get("created_at")
+    return (datetime.date.fromtimestamp(c) if c else datetime.date.today()).isoformat()
 
 def waiting_reply(message, state, key, model):
     """state needs: day (current sim day), days_left, stage (display name, e.g. 'Grievance officer').
@@ -245,9 +249,8 @@ def waiting_reply(message, state, key, model):
     in place without changing anything, or None if nothing usable came back -- the caller
     should fall through to the existing canned reply rather than show nothing.
     """
-    import datetime
     due_day = state["day"] + state["days_left"]
-    today_real = datetime.date.today().isoformat()
+    today_real = _opened_iso(state)
     facts = (f"This case opened on {today_real} (that real-world date is case-day 0). "
              f"The simulated clock is currently at case-day {state['day']}. "
              f"Days left in this reply window: {state['days_left']}. Current stage: {state['stage']}. "

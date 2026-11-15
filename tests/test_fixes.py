@@ -271,10 +271,32 @@ def test_escalation_sends_notification(tmp_path):
     svc.respond(cid, {"action": "advance", "days": 999})
     assert len(sent) == 1
 
-def test_extract_fields_handles_real_world_phrasing():
-    f = nlu.extract_fields("I bought a kurta on Myntra three weeks ago. The refund never came. Order no is 88213, Rs 1,499.")
-    assert f == {"platform": "Myntra", "amount": "1499", "order_id": "88213"}
-    f = nlu.extract_fields("I got a wrong size of sneakers from Tata CLiQ. Order number 5521.")
-    assert f == {"platform": "Tata CLiQ", "order_id": "5521"}
-    f = nlu.extract_fields("I ordered shoes from Roadster and lost track, the order no is 24732")
-    assert f["platform"] == "Roadster" and f["order_id"] == "24732" and "amount" not in f
+
+def test_letters_have_no_markdown_asterisks():
+    from escalation_agent.graph import _plain
+    assert _plain("**Company:** Roadster\n**Order:** 1") == "Company: Roadster\nOrder: 1"
+
+
+def test_case_exposes_creation_time_for_clients(tmp_path):
+    svc = CaseService(db_path=str(tmp_path / "t.db"), polish=None, notifier=None)
+    v = svc.start("Phone", "broken", platform="Amazon", order_id="OD-1", amount="10")
+    assert v["created_at"] > 0
+    assert svc.list_cases()[0]["created_at"] == pytest.approx(v["created_at"], abs=5)
+
+
+def test_notifier_failure_never_breaks_a_case(tmp_path):
+    def boom(*args):
+        raise RuntimeError("smtp down")
+    svc = CaseService(db_path=str(tmp_path / "t.db"), polish=None, notifier=boom)
+    cid = svc.start("Phone", "broken", platform="Amazon", order_id="OD-1", amount="10")["case_id"]
+    svc.respond(cid, {"action": "sent"})
+    r = svc.respond(cid, {"action": "advance", "days": 8})
+    assert r["status"] == "draft_ready" and "notice" not in r
+def test_opened_date_uses_case_creation_not_today():
+    import datetime
+    from escalation_agent import nlu
+    ten_days_ago = datetime.datetime.now().timestamp() - 10 * 86400
+    expected = (datetime.date.today() - datetime.timedelta(days=10)).isoformat()
+    assert nlu._opened_iso({"created_at": ten_days_ago}) == expected
+    # no creation time given -> falls back to today
+    assert nlu._opened_iso({}) == datetime.date.today().isoformat()

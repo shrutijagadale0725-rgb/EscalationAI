@@ -143,7 +143,7 @@ dialog{border:1.5px solid var(--navy);border-radius:4px;padding:0;max-width:480p
 dialog::backdrop{background:rgba(12,12,61,.5)}dialog form{padding:24px}dialog h2{font:400 28px/1.1 var(--disp);margin-bottom:10px}dialog p,dialog dl{margin:0 0 10px}
 dialog .row{display:flex;gap:8px;justify-content:flex-end;margin-top:16px;flex-wrap:wrap}dl.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font-size:14px}dl.kv dt{color:var(--mut)}dl.kv dd{margin:0;overflow-wrap:anywhere}
 dialog ul{margin:0 0 10px;padding-left:18px}dialog li{margin-bottom:4px}
-#toast{position:fixed;left:50%;bottom:24px;transform:translate(-50%,20px);background:var(--navy);color:#fff;padding:10px 16px;border-radius:var(--r);opacity:0;pointer-events:none;transition:.2s;z-index:50;max-width:90vw}#toast.show{opacity:1;transform:translate(-50%,0)}
+#toast{position:fixed;left:50%;bottom:24px;transform:translate(-50%,20px);background:var(--navy);color:#fff;padding:10px 16px;border-radius:var(--r);opacity:0;pointer-events:none;transition:.2s;z-index:50;max-width:90vw}#toast.show{opacity:1;transform:translate(-50%,0)}#toast.top{bottom:auto;top:84px}
 
 /* ===== landing (jasper.ai direction) ===== */
 #landing{display:none}body.landing #landing{display:block}
@@ -417,7 +417,7 @@ body.nocase .tabs{display:none!important}
   </section>
   <section class="sec" id="secLetter"><h2>Your letter</h2>
    <div class="empty" id="lEmpty">Your letter will appear here once the details are complete.</div>
-   <div id="lDoc" hidden><dl class="lmeta" id="lMeta"></dl><div class="sheet" id="sheet"></div>
+   <div id="lDoc" hidden><dl class="lmeta" id="lMeta"></dl><p id="aiTag" class="note" style="margin:0 0 8px;font-weight:600">AI-drafted. Review it before you send.</p><div class="sheet" id="sheet"></div>
     <div class="acts"><button class="btn pri" id="copy">Copy letter</button><button class="btn" id="wa">WhatsApp</button><button class="btn" id="mail">Email</button><button class="btn" id="pdf">Save as PDF</button><button class="btn" id="dl">Download</button><button class="btn" id="edit">Edit</button></div>
     <p class="note">Review it, then send it yourself. Nothing is sent on your behalf.</p></div>
   </section>
@@ -449,6 +449,13 @@ const LABEL={collecting:["Getting details",""],drafting:["Writing letter",""],dr
 const CHIPS=[["I sent it","I sent it",["draft_ready"]],["They replied","they replied",["waiting"]],["File it","file it",["gate"]],["It's resolved","it is resolved",["draft_ready","waiting","gate"]],["Reopen","reopen",["closed"]],["Stop case","stop",["draft_ready","waiting","gate"],"stop"]];
 const EX=["My earbuds from Amazon arrived broken, order OD-12345, Rs 2499","I returned my shoes to Flipkart but the refund never came, order OD-67890, Rs 3499"];
 const dt=d=>new Date(caseStart+d*864e5).toLocaleDateString("en-IN",{day:"numeric",month:"short"});
+/* Day 0 of a case = the moment it was created. Saved per case so a reload after a simulated
+   "skip 8 days" can't shift every date. Brand-new cases start at now; older ones fall back to an estimate. */
+function anchor(id,r){const k="escalai_day0_"+id;
+ if(r.created_at>0)return r.created_at*1000; /* server truth: the real opening time = case-day 0 */
+ try{const v=Number(localStorage.getItem(k));if(v>0)return v}catch(_){}
+ if(r.tool==="start_case"||!(r.day>0)){const t=Date.now();try{localStorage.setItem(k,String(t))}catch(_){}return t}
+ return 0}
 const post=(u,b)=>fetch(u,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b||{})});
 function view(v){document.body.dataset.view=v;document.body.classList.remove("drawer");document.querySelectorAll(".tabs button").forEach(b=>b.setAttribute("aria-current",b.dataset.view===v))}
 document.querySelector(".tabs").onclick=e=>{const b=e.target.closest("button");if(b)view(b.dataset.view)};
@@ -556,7 +563,7 @@ function bindSplit(k){
  el.addEventListener("dblclick",()=>{W[k]=PANE[k].def;applyW();saveW(k)})}
 bindSplit("sw");bindSplit("cw");applyW();addEventListener("resize",applyW);
 
-function toast(t){const e=$("toast");e.textContent=t;e.classList.add("show");clearTimeout(toast.t);toast.t=setTimeout(()=>e.classList.remove("show"),2400)}
+function toast(t,top){const e=$("toast");e.textContent=t;e.classList.toggle("top",!!top);e.classList.add("show");clearTimeout(toast.t);toast.t=setTimeout(()=>e.classList.remove("show"),top?7000:2400)}
 function ask(title,html,ok,cb,cancel=true){$("dT").textContent=title;$("dB").innerHTML=html;$("dOk").textContent=ok;$("dNo").hidden=!cancel;const d=$("dlg");d.onclose=()=>{if(d.returnValue==="ok"&&cb)cb()};d.returnValue="";d.showModal()}
 $("dNo").onclick=()=>$("dlg").close("no");
 $("trustBtn").onclick=()=>ask("How this works","<p>This tool helps you write and track a consumer complaint.</p><p><b>What it does</b></p><ul><li>Writes complaint letters as drafts</li><li>Tracks how long the company has to reply</li><li>Shows the next official step and links to it</li></ul><p><b>What it does not do</b></p><ul><li>Send messages or contact the company</li><li>File cases for you</li><li>Give legal advice</li></ul><p><b>What is saved</b></p><p>Your name, item, seller, order ID, amount, letters and case history, so you can come back to the case. Never enter card numbers, passwords or OTPs.</p>","Got it",null,false);
@@ -591,7 +598,7 @@ function renderNext(r){
  closed:["mut","Case stopped","No reminders will be sent. You can reopen it any time.",btn("Reopen case","reopen")]};
  const m=M[s]||["","In progress","Use the chat to update this case."];
  let h=`<h2>${esc(m[1])}</h2><p>${esc(m[2])}</p>`;
- if(s==="waiting"&&winTotal){const e=Math.max(0,Math.min(winTotal,r.day-winStart));h+=`<div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="${winTotal}" aria-valuenow="${e}"><i style="width:${e/winTotal*100}%"></i></div><p class="note" style="margin-bottom:12px">Day ${e} of ${winTotal}. Reply due by ${dt(r.day+r.days_left)}.</p>`}
+ if(s==="waiting"&&winTotal){const e=Math.max(0,Math.min(winTotal,r.day-winStart));h+=`<div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="${winTotal}" aria-valuenow="${e}"><i style="width:${e/winTotal*100}%"></i></div><p class="note" style="margin-bottom:12px">Day ${e} of ${winTotal}. Reply due ${caseStart?"by "+dt(r.day+r.days_left)+" ("+r.days_left+" day"+(r.days_left==1?"":"s")+" left)":"in "+r.days_left+" day"+(r.days_left==1?"":"s")}.</p>`}
  const si=STEPS.findIndex(k=>(r.stage||"").toLowerCase().includes(k[0])),nx=["the company's grievance officer","the National Consumer Helpline","a Consumer Commission case"];
  if(si>=0&&si<3&&/draft_ready|waiting|escalating|gate/.test(s))h+=`<p class="note" style="margin-bottom:12px">If this doesn't fix it, the next step is ${nx[si]}.</p>`;
  if(m[3])h+=`<div class="row">${m[3]}</div>`;
@@ -599,7 +606,7 @@ function renderNext(r){
 function renderTrack(r){
  const i=STEPS.findIndex(k=>(r.stage||"").toLowerCase().includes(k[0])),w=r.status==="waiting";
  $("track").innerHTML=STEPS.map((s,n)=>{const d=n<i||r.status==="resolved",o=n===i&&!d;
-  let sub=o&&w?`<span class="mut" style="display:block;font-weight:400">Due ${dt(r.day+r.days_left)}</span>`:"";if(s[2]&&(o||d))sub+=`<a href="${s[2]}" target="_blank" rel="noopener">Official site</a>`;
+  let sub=o&&w?`<span class="mut" style="display:block;font-weight:400">Due ${caseStart?dt(r.day+r.days_left):"in "+r.days_left+" day"+(r.days_left==1?"":"s")}</span>`:"";if(s[2]&&(o||d))sub+=`<a href="${s[2]}" target="_blank" rel="noopener">Official site</a>`;
   return`<li class="${d?"done":o?"on"+(w?" wait":""):""}">${s[1]}${sub}</li>`}).join("");
  const t=r.timeline||[];$("hist").hidden=!t.length;$("tl").innerHTML=t.map(x=>`<li>${esc(x)}</li>`).join("")}
 function renderCase(r){
@@ -607,12 +614,13 @@ function renderCase(r){
  const L=LABEL[r.status]||["Open",""];$("cBadge").className="badge "+L[1];$("cBadge").textContent=L[0];
  $("cTitle").textContent=(info.product||"Your complaint")+(info.platform?" from "+info.platform:"");
  $("cMeta").innerHTML=[["Order",info.order_id],["Amount",info.amount]].filter(x=>x[1]).map(x=>`<span>${x[0]}: ${esc(x[1])}</span>`).join("");
- lastR=r;renderNext(r);renderTrack(r)}
+lastR=r;renderNext(r);renderTrack(r);tag()}
 function renderChips(){
  const b=[];CHIPS.forEach(k=>{if(caseId&&lastStatus&&k[2].includes(lastStatus))b.push(k)});
  $("chips").innerHTML=b.map(k=>`<button data-q="${esc(k[1])}"${k[3]?` class="${k[3]}"`:""}>${esc(k[0])}</button>`).join("")}
-function showLetter(t){const si=STEPS.findIndex(k=>(lastStage||"").toLowerCase().includes(k[0])),to=si<=0?(info.platform||"The seller"):STEPS[si][1];
- $("lMeta").innerHTML=`<dt>To</dt><dd>${esc(to)}</dd><dt>Subject</dt><dd>${esc("Complaint about "+(info.product||"my order")+(info.order_id?" (Order "+info.order_id+")":""))}</dd>`;$("sheet").textContent=t;$("lEmpty").hidden=true;$("lDoc").hidden=false}
+var letterOrig="",letterEdited=false;
+function tag(){const e=$("aiTag");if(!e)return;e.textContent=(lastR&&lastR.status==="waiting")?"You marked this letter as sent.":letterEdited?"Edited by you. Review it before you send.":"AI-drafted. Review it before you send."}function showLetter(t){const si=STEPS.findIndex(k=>(lastStage||"").toLowerCase().includes(k[0])),to=si<=0?(info.platform||"The seller"):STEPS[si][1];
+ $("lMeta").innerHTML=`<dt>To</dt><dd>${esc(to)}</dd><dt>Subject</dt><dd>${esc("Complaint about "+(info.product||"my order")+(info.order_id?" (Order "+info.order_id+")":""))}</dd>`;$("sheet").textContent=t;$("lEmpty").hidden=true;$("lDoc").hidden=false;letterOrig=t;letterEdited=false;tag()}
 async function loadCases(){
  try{const d=await(await post("/api/tool/list_cases")).json(),items=d.cases||[],L=$("caseList");
   if(!items.length){L.innerHTML='<li class="note" style="padding:6px 10px">No complaints yet.</li>';return}
@@ -620,10 +628,11 @@ async function loadCases(){
    const nm=(c.product||"Complaint")+(c.platform?" · "+c.platform:"");
    return`<li><button class="cb ${c.case_id===caseId?"active":""}" data-case='${esc(JSON.stringify(c))}'><span class="n">${esc(nm)}</span><span class="badge ${esc(l[1])}">${esc(l[0])}</span></button><button class="del" data-del="${esc(c.case_id)}" data-name="${esc(nm)}" aria-label="Delete ${esc(nm)}" title="Delete"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg></button></li>`}).join("")}catch(e){}}
 function showResult(r,force){
- if(r.case_id&&r.case_id!==caseId){caseId=r.case_id;caseStart=Date.now()-(r.day||0)*864e5}
+ if(r.case_id&&r.case_id!==caseId){caseId=r.case_id;caseStart=anchor(r.case_id,r)}
+ if(r.notice)toast(r.notice,true);
  if(r.tool==="start_case"&&r.args){info={...info,...r.args};if(r.args.name)userName=r.args.name;awaitName=false;loadCases()}
  if(r.status){if(r.status!==prevStatus)replied=false;lastStatus=r.status;done=/resolved|closed|ready_to_file/.test(r.status);endState=done?classify(r.status):null;
-  if(r.status==="waiting"&&(prevStatus!=="waiting"||r.stage!==lastStage)){winStart=r.day;winTotal=r.days_left}
+  if(r.status==="waiting"&&(prevStatus!=="waiting"||r.stage!==lastStage)){const W={seller:7,grievance:30,helpline:45},k=Object.keys(W).find(x=>(r.stage||"").toLowerCase().includes(x));winTotal=k?W[k]:r.days_left;winStart=r.day+r.days_left-winTotal}
   prevStatus=r.status;lastStage=r.stage||lastStage}
  const shown=r.draft&&(force||/draft_ready|ready_to_file/.test(r.status||""));
  const msg=r.status==="collecting"?"I need a few more details before I can write your letter.":(force&&shown)?"Here's your letter. It's in the Letter section.":(r.say||"Done.");
@@ -637,7 +646,7 @@ async function switchCase(m){
  const v=await r.json();prevStatus=null;lastStage=null;endState=null;
  info={product:m.product,platform:m.platform,order_id:m.order_id,amount:m.amount};userName=m.name||"";awaitName=false;
  log.innerHTML="";$("lDoc").hidden=true;$("lEmpty").hidden=false;caseId=null;
- add("Opened your "+(m.product||"complaint")+" case.","bot");showResult(v,true);view("case")}
+ add("Opened your "+(m.product||"complaint")+" case.","bot");showResult(m.created_at?{...v,created_at:m.created_at}:v,true);view("case")}
 document.addEventListener("click",e=>{const b=e.target.closest("[data-case]");if(b)switchCase(JSON.parse(b.dataset.case))});
 document.addEventListener("click",e=>{const d=e.target.closest("[data-del]");if(!d)return;const id=d.dataset.del;
  ask("Delete this complaint?",`<p><b>${esc(d.dataset.name)}</b>, its letters and its history will be deleted for good. This can't be undone.</p>`,"Delete",async()=>{
@@ -723,7 +732,7 @@ $("pdf").onclick=()=>{
  const p=$("printOnly"),t=document.title;p.textContent=LT();document.title="Complaint letter";
  const done=()=>{document.title=t;p.textContent="";removeEventListener("afterprint",done)};
  addEventListener("afterprint",done);print()};
-$("edit").onclick=e=>{const t=$("sheet"),on=t.contentEditable!=="true";t.contentEditable=on;e.target.textContent=on?"Done editing":"Edit";if(on)t.focus()};
+$("edit").onclick=e=>{const t=$("sheet"),on=t.contentEditable!=="true";t.contentEditable=on;e.target.textContent=on?"Done editing":"Edit";if(on)t.focus();else{const n=s=>s.replace(/\s+/g," ").trim();letterEdited=n(LT())!==n(letterOrig);tag()}};
 /* demo tools only with ?demo */
 if(/[?&]demo\b/.test(location.search)){document.body.classList.add("demo");fetch("/").then(r=>{$("mcp").textContent=r.ok?"Server: connected":"Server: offline"}).catch(()=>{$("mcp").textContent="Server: offline"})}
 /* mic */

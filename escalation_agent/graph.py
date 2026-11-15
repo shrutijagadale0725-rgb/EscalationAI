@@ -1,7 +1,8 @@
 """The LangGraph case workflow. Every wait is an interrupt, so state survives across days."""
-import time
 import re
+import time
 from typing import TypedDict
+
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
@@ -39,9 +40,12 @@ def _days(v, default=0):
     except (TypeError, ValueError):
         return default
 
+
 def _plain(text):
     """Letters are copied into email/WhatsApp, so strip Markdown bold markers."""
     return re.sub(r"\*\*(.+?)\*\*", r"\1", text or "")
+
+
 def build_graph(rules, checkpointer, polish=None, clock=time.time):
     stages = rules["stages"]
 
