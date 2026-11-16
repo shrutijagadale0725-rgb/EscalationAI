@@ -39,3 +39,12 @@ Two subtler bugs came out of building this: (1) the general router's fallback-on
 ## Deleting a case means deleting LangGraph's own state, not just an index row
 
 `delete_case` isn't just a SQL `DELETE` on the app's own case table — each case is a LangGraph thread persisted via `SqliteSaver`, with its own checkpoint rows keyed by `thread_id`. Skipping those would leave orphaned graph state behind for every deleted case. There's no public "delete this thread" method on `SqliteSaver`, so this reaches into its known table names (`checkpoints`, `checkpoint_writes`, `checkpoint_blobs`) directly, with each delete wrapped individually so a renamed table in some future langgraph-checkpoint-sqlite version can't block the rest of the cleanup.
+
+Add-Content FRICTION_LOG.md @"
+
+## Typed calendar dates counted from today, not from the case's opening date
+- **Symptom:** On an older case, typing "27 feb" said "44 days, 1 more day" even though the Helpline reply was due 25 Feb. The case did not escalate.
+- **Cause:** The waiting-stage date reader treated today's date as case-day 0. The real day 0 is the day the case was opened, so every date was off by the age of the case. It never showed on a case created the same day.
+- **Fix:** The case's creation time is now passed from the service layer to the date reader, which counts from it. Added a test.
+- **Lesson:** Test time-dependent logic on a case that is days old, not only a fresh one.
+"@
